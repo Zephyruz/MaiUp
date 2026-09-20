@@ -2,6 +2,9 @@ void (async () => {
   'use strict';
 
   const EXPECTED_HOST = 'maimaidx-eng.com';
+  const DEFAULT_MAIUP_ORIGIN = 'http://localhost:3000';
+  const HANDOFF_CHANNEL = 'maiup.dxnet-import';
+  const HANDOFF_VERSION = 1;
   const SEARCH_PATH = '/maimai-mobile/record/musicGenre/search/';
   const RATING_PATH = '/maimai-mobile/home/ratingTargetMusic/';
   const DETAIL_PATH = '/maimai-mobile/record/musicDetail/';
@@ -15,6 +18,74 @@ void (async () => {
     );
     return;
   }
+
+  function resolveMaiUpOrigin() {
+    const configured = globalThis.__MAIUP_IMPORT_ORIGIN__;
+    delete globalThis.__MAIUP_IMPORT_ORIGIN__;
+    try {
+      const url = new URL(
+        typeof configured === 'string' ? configured : DEFAULT_MAIUP_ORIGIN,
+      );
+      if (
+        url.protocol !== 'http:' ||
+        !['localhost', '127.0.0.1'].includes(url.hostname)
+      ) {
+        return DEFAULT_MAIUP_ORIGIN;
+      }
+      return url.origin;
+    } catch {
+      return DEFAULT_MAIUP_ORIGIN;
+    }
+  }
+
+  const maiupOrigin = resolveMaiUpOrigin();
+  const handoffId =
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const handoffWindow = window.open(
+    `${maiupOrigin}/dxnet-import#${encodeURIComponent(handoffId)}`,
+    '_blank',
+    'popup,width=560,height=720',
+  );
+  let handoffReady = false;
+  let resolveHandoffReady;
+  let resolveHandoffResult;
+  const handoffReadyPromise = new Promise((resolve) => {
+    resolveHandoffReady = resolve;
+  });
+  const handoffResultPromise = new Promise((resolve) => {
+    resolveHandoffResult = resolve;
+  });
+
+  function onHandoffMessage(event) {
+    if (event.origin !== maiupOrigin || event.source !== handoffWindow) return;
+    const message = event.data;
+    if (
+      !message ||
+      typeof message !== 'object' ||
+      message.channel !== HANDOFF_CHANNEL ||
+      message.version !== HANDOFF_VERSION ||
+      message.handoffId !== handoffId
+    ) {
+      return;
+    }
+    if (message.type === 'receiver-ready') {
+      handoffReady = true;
+      resolveHandoffReady(true);
+    } else if (message.type === 'import-complete') {
+      resolveHandoffResult({ ok: true, importId: message.importId });
+    } else if (message.type === 'import-error') {
+      resolveHandoffResult({
+        ok: false,
+        message:
+          typeof message.message === 'string'
+            ? message.message
+            : 'The local importer rejected the payload.',
+      });
+    }
+  }
+
+  window.addEventListener('message', onHandoffMessage);
 
   const existing = document.getElementById('maiup-export-status');
   if (existing) existing.remove();
@@ -32,6 +103,60 @@ void (async () => {
     boxShadow: '0 12px 40px rgba(0,0,0,.45)',
   });
   document.body.append(status);
+
+  function waitFor(promise, timeoutMs, fallback) {
+    return Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(() => resolve(fallback), timeoutMs)),
+    ]);
+  }
+
+  function downloadPayload(payload) {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const link = document.createElement('a');
+    const downloadUrl = URL.createObjectURL(blob);
+    link.href = downloadUrl;
+    link.download = `maiup-scores-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.append(link);
+    link.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(downloadUrl);
+      link.remove();
+    }, 1000);
+  }
+
+  async function deliverToMaiUp(payload) {
+    if (!handoffWindow || handoffWindow.closed) {
+      return {
+        ok: false,
+        message: 'The local MaiUp window was blocked or disconnected.',
+      };
+    }
+    const ready =
+      handoffReady || (await waitFor(handoffReadyPromise, 5000, false));
+    if (!ready || handoffWindow.closed) {
+      return {
+        ok: false,
+        message: 'MaiUp did not become ready on localhost.',
+      };
+    }
+    handoffWindow.postMessage(
+      {
+        channel: HANDOFF_CHANNEL,
+        version: HANDOFF_VERSION,
+        type: 'score-payload',
+        handoffId,
+        payload,
+      },
+      maiupOrigin,
+    );
+    return waitFor(handoffResultPromise, 45000, {
+      ok: false,
+      message: 'MaiUp did not confirm the import in time.',
+    });
+  }
 
   const iconStem = (image) => {
     const source = image.getAttribute('src') || '';
@@ -418,8 +543,7 @@ void (async () => {
       officialBest50?.map((score) =>
         publicScore({
           ...score,
-          playedAt:
-            playedAtByChart.get(scoreKey(score)) ?? score.playedAt,
+          playedAt: playedAtByChart.get(scoreKey(score)) ?? score.playedAt,
         }),
       ) ?? null;
 
@@ -432,34 +556,31 @@ void (async () => {
       officialBest50: exportedBest50,
       exportWarnings,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: 'application/json;charset=utf-8',
-    });
-    const link = document.createElement('a');
-    const downloadUrl = URL.createObjectURL(blob);
-    link.href = downloadUrl;
-    link.download = `maiup-scores-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.append(link);
-    link.click();
-    setTimeout(() => {
-      URL.revokeObjectURL(downloadUrl);
-      link.remove();
-    }, 1000);
+    status.textContent = 'MaiUp: sending scores to the local importer…';
+    const handoffResult = await deliverToMaiUp(payload);
     const activityText = activityCoverage.requested
       ? ` Last-play dates matched ${activityCoverage.matched} chart scores.`
       : ' Last-play dates were unavailable.';
     const warningText = exportWarnings.length
       ? ` Skipped ${exportWarnings.length} unreadable card(s); details are included in exportWarnings.`
       : '';
-    status.textContent =
-      (officialBest50
-        ? `MaiUp: exported ${scores.length} played charts and the official B35 / B15.${activityText}`
-        : `MaiUp: exported ${scores.length} played charts; official B50 was unavailable.${activityText}`) +
-      warningText;
+    if (handoffResult.ok) {
+      status.textContent =
+        (officialBest50
+          ? `MaiUp: imported ${scores.length} played charts and the official B35 / B15.${activityText}`
+          : `MaiUp: imported ${scores.length} played charts; official B50 was unavailable.${activityText}`) +
+        warningText;
+    } else {
+      downloadPayload(payload);
+      status.style.color = '#fde68a';
+      status.textContent = `MaiUp automatic import was unavailable: ${handoffResult.message} A JSON fallback was downloaded.`;
+    }
     setTimeout(() => status.remove(), 8000);
   } catch (error) {
     status.style.color = '#fecdd3';
     const message = error instanceof Error ? error.message : String(error);
     status.textContent = `MaiUp export failed: ${message}`;
+  } finally {
+    window.removeEventListener('message', onHandoffMessage);
   }
 })();
