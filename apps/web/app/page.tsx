@@ -106,16 +106,19 @@ export default function Home() {
       const isLocalPreview = ['localhost', '127.0.0.1'].includes(
         window.location.hostname,
       );
+      const configuredSource = `globalThis.__MAIUP_IMPORT_ORIGIN__=${JSON.stringify(
+        isLocalPreview ? window.location.origin : 'http://localhost:3000',
+      )};${source}`;
       const bookmarklet = isLocalPreview
-        ? `javascript:${source.replace(/\r?\n/g, ' ')}`
-        : `javascript:(()=>{const s=document.createElement('script');s.src=${JSON.stringify(
+        ? `javascript:${configuredSource.replace(/\r?\n/g, ' ')}`
+        : `javascript:(()=>{globalThis.__MAIUP_IMPORT_ORIGIN__='http://localhost:3000';const s=document.createElement('script');s.src=${JSON.stringify(
             new URL('/maiup-dxnet-export.js', window.location.origin).href,
           )}+'?v='+Date.now();s.onerror=()=>alert('MaiUp exporter failed to load.');document.head.append(s)})()`;
       await navigator.clipboard.writeText(bookmarklet);
       setBookmarkletMessage(
         isLocalPreview
-          ? '已复制。新建浏览器书签，把内容粘贴到网址栏。'
-          : '已复制手机兼容版。保存为书签后，在已登录的 DX NET 页面运行。',
+          ? '已复制自动导入书签。保存后，在已登录的 DX NET 页面点击一次。'
+          : '已复制书签。运行时会连接本机 http://localhost:3000。',
       );
     } catch (error: unknown) {
       setBookmarkletMessage(
@@ -483,14 +486,23 @@ export default function Home() {
                       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
                         <Button
                           type="button"
+                          onClick={() => void copyBookmarklet()}
+                          className="min-h-11 gap-2 rounded-xl bg-fuchsia-300 text-slate-950 hover:bg-fuchsia-200"
+                        >
+                          <Sparkles className="size-4" />
+                          复制自动导入书签
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
                           disabled={scoreImportState === 'uploading'}
                           onClick={() => scoreFileInput.current?.click()}
-                          className="min-h-11 gap-2 rounded-xl bg-fuchsia-300 text-slate-950 hover:bg-fuchsia-200"
+                          className="min-h-11 gap-2 rounded-xl border-fuchsia-200/20 bg-fuchsia-300/5 text-fuchsia-100 hover:bg-fuchsia-300/10"
                         >
                           <FileJson className="size-4" />
                           {scoreImportState === 'uploading'
                             ? '导入中…'
-                            : '选择成绩 JSON'}
+                            : 'JSON 兜底导入'}
                         </Button>
                         <input
                           ref={scoreFileInput}
@@ -511,7 +523,8 @@ export default function Home() {
                           }
                         >
                           {scoreImportMessage ??
-                            '下一步会提供 DX NET 页面内运行的导出工具。'}
+                            bookmarkletMessage ??
+                            '先启动本机前后端，再到已登录的 DX NET 页面运行书签。'}
                         </p>
                       </div>
                       <div className="mt-4 rounded-2xl border border-white/8 bg-white/3 p-4">
@@ -519,27 +532,13 @@ export default function Home() {
                           从 DX NET 导出
                         </p>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                          将导出脚本保存成书签。在已登录的 International DX NET
-                          页面点击一次，它会读取全部 5 个难度、官网
-                          B35/B15，以及与上分区间相关谱面的最后游玩时间并下载
+                          将脚本保存成书签。在已登录的 International DX NET
+                          页面点击一次，它会先打开本机 MaiUp，再读取全部 5
+                          个难度、官网 B35/B15
+                          和相关谱面的最后游玩时间，自动导入并跳转分析。若弹窗、本机服务或通信失败，会自动下载
                           JSON；账号凭据不会离开 DX
                           NET，日期读取可能需要几十秒。
                         </p>
-                        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => void copyBookmarklet()}
-                            className="min-h-10 rounded-xl border-fuchsia-200/20 bg-fuchsia-300/5 text-fuchsia-100 hover:bg-fuchsia-300/10"
-                          >
-                            复制导出书签代码
-                          </Button>
-                          {bookmarkletMessage && (
-                            <span className="text-xs text-muted-foreground">
-                              {bookmarkletMessage}
-                            </span>
-                          )}
-                        </div>
                       </div>
                       {scoreImportResult && (
                         <div className="mt-5 rounded-2xl border border-fuchsia-200/15 bg-slate-950/35 p-4">
