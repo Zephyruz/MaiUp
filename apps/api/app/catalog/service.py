@@ -403,6 +403,7 @@ def ingest_catalog(
         validation_report=validation.model_dump_json(),
     )
     session.add(snapshot)
+    session.flush()
 
     versions_by_name = {item.name: item for item in session.scalars(select(GameVersion)).all()}
     songs_by_id = {item.id: item for item in session.scalars(select(Song)).all()}
@@ -431,11 +432,17 @@ def ingest_catalog(
 
     international_song_ids: set[str] = set()
     international_chart_ids: set[str] = set()
+    international_catalog_songs = [
+        (raw_song, [sheet for sheet in raw_song.sheets if "intl" in sheet.server_ids])
+        for raw_song in catalog.songs
+    ]
+    international_catalog_songs = [
+        (raw_song, intl_sheets)
+        for raw_song, intl_sheets in international_catalog_songs
+        if intl_sheets
+    ]
 
-    for raw_song in catalog.songs:
-        intl_sheets = [sheet for sheet in raw_song.sheets if "intl" in sheet.server_ids]
-        if not intl_sheets:
-            continue
+    for raw_song, _ in international_catalog_songs:
         international_song_ids.add(raw_song.id)
         song = songs_by_id.get(raw_song.id)
         if song is None:
@@ -458,6 +465,9 @@ def ingest_catalog(
             song.source_version = raw_song.version
             song.is_locked = raw_song.is_locked
 
+    session.flush()
+
+    for raw_song, intl_sheets in international_catalog_songs:
         for sheet in intl_sheets:
             international_chart_ids.add(sheet.id)
             chart = charts_by_id.get(sheet.id)
@@ -472,6 +482,10 @@ def ingest_catalog(
                 session.add(chart)
                 charts_by_id[chart.id] = chart
 
+    session.flush()
+
+    for raw_song, intl_sheets in international_catalog_songs:
+        for sheet in intl_sheets:
             intl_version = sheet.version_for("intl")
             version_constant = _version_constant_for(
                 raw_song.title,
@@ -563,6 +577,8 @@ def ingest_catalog(
             tag.group_id = raw_tag.group_id
             tag.name_zh_hans = zh_name
             tag.name_en = en_name
+
+    session.flush()
 
     for link in catalog.tag_songs:
         if link.sheet_id not in international_chart_ids:
