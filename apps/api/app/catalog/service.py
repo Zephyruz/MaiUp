@@ -381,6 +381,12 @@ def ingest_catalog(
         )
         session.add(override_source)
 
+    # PostgreSQL enforces the snapshot foreign key immediately when the
+    # following read queries trigger an autoflush. Persist the three source
+    # rows first so a fresh remote database cannot flush the snapshot ahead of
+    # its parent source.
+    session.flush()
+
     snapshot = CatalogSnapshot(
         id=snapshot_id,
         source_id=source.id,
