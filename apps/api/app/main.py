@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from contextlib import asynccontextmanager
+import logging
+from contextlib import asynccontextmanager, suppress
 from decimal import Decimal
 from typing import Annotated
 
@@ -47,20 +49,41 @@ from app.imports.service import (
 from app.rating.calculator import calculate_chart_rating, coefficient_for
 from app.recommendations.service import RecommendationError, build_recommendations
 
+logger = logging.getLogger(__name__)
+
+
+async def _sync_catalog_in_background() -> None:
+    from app.jobs.sync_catalog import sync_catalog
+
+    try:
+        await sync_catalog()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Background catalog synchronization failed")
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_local_owner_columns()
     settings = get_settings()
+    catalog_sync_task: asyncio.Task[None] | None = None
     if settings.sync_catalog_on_start:
-        from app.jobs.sync_catalog import sync_catalog
-
         with SessionLocal() as session:
             ready = catalog_status(session).get("ready")
         if not ready:
-            await sync_catalog()
-    yield
+            catalog_sync_task = asyncio.create_task(
+                _sync_catalog_in_background(),
+                name="maiup-catalog-sync",
+            )
+    try:
+        yield
+    finally:
+        if catalog_sync_task is not None and not catalog_sync_task.done():
+            catalog_sync_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await catalog_sync_task
 
 
 app = FastAPI(
