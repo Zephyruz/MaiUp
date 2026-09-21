@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.catalog.schemas import CatalogValidation, IngestResult, RawCatalog
@@ -398,17 +398,26 @@ def ingest_catalog(
     )
     session.add(snapshot)
 
+    versions_by_name = {item.name: item for item in session.scalars(select(GameVersion)).all()}
+    songs_by_id = {item.id: item for item in session.scalars(select(Song)).all()}
+    charts_by_id = {item.id: item for item in session.scalars(select(Chart)).all()}
+    tags_by_id = {item.id: item for item in session.scalars(select(Tag)).all()}
+    existing_aliases = {
+        (song_id, name.casefold())
+        for song_id, name in session.execute(select(SongAlias.song_id, SongAlias.name))
+    }
+
     for ordinal, version in enumerate(catalog.versions):
-        stored = session.get(GameVersion, version.version)
+        stored = versions_by_name.get(version.version)
         if stored is None:
-            session.add(
-                GameVersion(
-                    name=version.version,
-                    abbreviation=version.abbr,
-                    release_date=version.release_date,
-                    ordinal=ordinal,
-                )
+            stored = GameVersion(
+                name=version.version,
+                abbreviation=version.abbr,
+                release_date=version.release_date,
+                ordinal=ordinal,
             )
+            session.add(stored)
+            versions_by_name[stored.name] = stored
         else:
             stored.abbreviation = version.abbr
             stored.release_date = version.release_date
@@ -422,7 +431,7 @@ def ingest_catalog(
         if not intl_sheets:
             continue
         international_song_ids.add(raw_song.id)
-        song = session.get(Song, raw_song.id)
+        song = songs_by_id.get(raw_song.id)
         if song is None:
             song = Song(
                 id=raw_song.id,
@@ -434,6 +443,7 @@ def ingest_catalog(
                 is_locked=raw_song.is_locked,
             )
             session.add(song)
+            songs_by_id[song.id] = song
         else:
             song.title = raw_song.title
             song.artist = raw_song.artist
@@ -444,7 +454,7 @@ def ingest_catalog(
 
         for sheet in intl_sheets:
             international_chart_ids.add(sheet.id)
-            chart = session.get(Chart, sheet.id)
+            chart = charts_by_id.get(sheet.id)
             if chart is None:
                 chart = Chart(
                     id=sheet.id,
@@ -454,6 +464,7 @@ def ingest_catalog(
                     internal_id=sheet.internal_id,
                 )
                 session.add(chart)
+                charts_by_id[chart.id] = chart
 
             intl_version = sheet.version_for("intl")
             version_constant = _version_constant_for(
@@ -519,13 +530,7 @@ def ingest_catalog(
         if alias_key in seen_aliases:
             continue
         seen_aliases.add(alias_key)
-        already_exists = session.scalar(
-            select(SongAlias.id).where(
-                SongAlias.song_id == alias.song_id,
-                func.lower(SongAlias.name) == alias.name.lower(),
-            )
-        )
-        if already_exists is None:
+        if alias_key not in existing_aliases:
             session.add(
                 SongAlias(
                     song_id=alias.song_id,
@@ -533,20 +538,21 @@ def ingest_catalog(
                     source_id=source.id,
                 )
             )
+            existing_aliases.add(alias_key)
 
     for raw_tag in catalog.tags:
-        tag = session.get(Tag, raw_tag.id)
+        tag = tags_by_id.get(raw_tag.id)
         zh_name = raw_tag.localized_name.get("zh-Hans", "")
         en_name = raw_tag.localized_name.get("en", "")
         if tag is None:
-            session.add(
-                Tag(
-                    id=raw_tag.id,
-                    group_id=raw_tag.group_id,
-                    name_zh_hans=zh_name,
-                    name_en=en_name,
-                )
+            tag = Tag(
+                id=raw_tag.id,
+                group_id=raw_tag.group_id,
+                name_zh_hans=zh_name,
+                name_en=en_name,
             )
+            session.add(tag)
+            tags_by_id[tag.id] = tag
         else:
             tag.group_id = raw_tag.group_id
             tag.name_zh_hans = zh_name
