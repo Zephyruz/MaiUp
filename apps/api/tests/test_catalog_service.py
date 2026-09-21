@@ -1,6 +1,11 @@
+import json
+from datetime import UTC, datetime
 from decimal import Decimal
 
-from app.catalog.schemas import Sheet
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.catalog.schemas import CatalogValidation, Sheet
 from app.catalog.service import (
     DXRATING_SOURCE_ID,
     LOCAL_OVERRIDE_SOURCE_ID,
@@ -9,7 +14,11 @@ from app.catalog.service import (
     _catalog_content_hash,
     _load_intl_overrides,
     _resolve_intl_constant,
+    canonical_json_bytes,
+    ingest_catalog,
 )
+from app.db.base import Base
+from app.db.models import CatalogSnapshot, DataSource
 
 
 def test_international_overrides_are_version_scoped(tmp_path) -> None:
@@ -178,3 +187,72 @@ def test_manual_constant_precedes_version_snapshot_then_base_fallback() -> None:
         "community_base_fallback",
         DXRATING_SOURCE_ID,
     )
+
+
+def test_reused_snapshot_restores_missing_raw_catalog_payload(tmp_path) -> None:
+    payload = {"schemaVersion": 1, "versions": [], "songs": [], "tags": []}
+    version_payload: list[object] = []
+    content_hash = _catalog_content_hash(
+        canonical_json_bytes(payload),
+        {},
+        version_payload,
+        "CiRCLE PLUS",
+    )
+    validation = CatalogValidation(
+        passed=True,
+        total_songs=1791,
+        international_songs=1538,
+        international_charts=6321,
+        current_version="CiRCLE PLUS",
+        b15_versions=["CiRCLE", "CiRCLE PLUS"],
+    )
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    raw_catalog_dir = tmp_path / "raw"
+
+    with Session(engine) as session:
+        session.add(
+            DataSource(
+                id=DXRATING_SOURCE_ID,
+                name="fixture",
+                url="https://example.invalid/catalog.json",
+                region_scope="intl",
+                trust_level="fixture",
+                license_note="fixture",
+            )
+        )
+        session.flush()
+        session.add(
+            CatalogSnapshot(
+                id="snapshot",
+                source_id=DXRATING_SOURCE_ID,
+                schema_version=1,
+                source_updated_at="2026-09-21T11:00:12Z",
+                etag='"fixture"',
+                content_hash=content_hash,
+                fetched_at=datetime.now(UTC),
+                published_at=datetime.now(UTC),
+                status="published",
+                song_count=1538,
+                chart_count=6321,
+                warning_count=0,
+                validation_report=validation.model_dump_json(),
+            )
+        )
+        session.commit()
+
+        result = ingest_catalog(
+            session,
+            payload,
+            source_url="https://example.invalid/catalog.json",
+            current_intl_version="CiRCLE PLUS",
+            overrides_path=tmp_path / "missing-overrides.json",
+            raw_catalog_dir=raw_catalog_dir,
+            etag='"fixture"',
+            version_constants_payload=version_payload,
+            version_constants_url="https://example.invalid/constants.json",
+            version_constants_version="CiRCLE PLUS",
+        )
+
+    assert result.reused_existing_snapshot is True
+    assert json.loads((raw_catalog_dir / f"{content_hash}.json").read_text()) == payload

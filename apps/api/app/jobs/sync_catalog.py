@@ -31,7 +31,16 @@ async def sync_catalog() -> None:
             .order_by(CatalogSnapshot.published_at.desc())
             .limit(1)
         )
-        previous_etag = previous_snapshot.etag if previous_snapshot else None
+        previous_raw_path = (
+            settings.raw_catalog_dir / f"{previous_snapshot.content_hash}.json"
+            if previous_snapshot
+            else None
+        )
+        previous_etag = (
+            previous_snapshot.etag
+            if previous_snapshot and previous_raw_path and previous_raw_path.exists()
+            else None
+        )
         fetched = await DxRatingCatalogProvider(settings.dxrating_url).fetch(previous_etag)
         if fetched.status_code == 304:
             if previous_snapshot is None:

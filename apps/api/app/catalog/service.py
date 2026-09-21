@@ -264,6 +264,8 @@ def ingest_catalog(
         select(CatalogSnapshot).where(CatalogSnapshot.content_hash == content_hash)
     )
     if existing:
+        raw_catalog_dir.mkdir(parents=True, exist_ok=True)
+        (raw_catalog_dir / f"{content_hash}.json").write_bytes(raw_bytes)
         validation = CatalogValidation.model_validate_json(existing.validation_report)
         return IngestResult(
             snapshot_id=existing.id,

@@ -23,7 +23,13 @@ from app.api.schemas import (
     RatingResponse,
 )
 from app.auth import CurrentPrincipal
-from app.catalog.queries import catalog_status, chart_constant, search_charts, search_songs
+from app.catalog.queries import (
+    catalog_status,
+    chart_constant,
+    latest_published_snapshot,
+    search_charts,
+    search_songs,
+)
 from app.config import get_settings
 from app.db.base import Base
 from app.db.models import PlayerImport, PlayerScoreSnapshot
@@ -71,8 +77,12 @@ async def lifespan(_: FastAPI):
     catalog_sync_task: asyncio.Task[None] | None = None
     if settings.sync_catalog_on_start:
         with SessionLocal() as session:
-            ready = catalog_status(session).get("ready")
-        if not ready:
+            snapshot = latest_published_snapshot(session)
+        raw_catalog_available = bool(
+            snapshot
+            and (settings.raw_catalog_dir / f"{snapshot.content_hash}.json").exists()
+        )
+        if snapshot is None or not raw_catalog_available:
             catalog_sync_task = asyncio.create_task(
                 _sync_catalog_in_background(),
                 name="maiup-catalog-sync",

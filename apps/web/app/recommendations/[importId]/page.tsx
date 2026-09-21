@@ -404,9 +404,9 @@ function RecommendationCard({ item }: { item: Recommendation }) {
     : null;
 
   return (
-    <article className="rounded-2xl border border-white/8 bg-white/3 p-4">
-      <div className="flex items-start gap-4">
-        <div className="relative size-24 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-slate-950/70 sm:size-28">
+    <article className="min-w-0 overflow-hidden rounded-2xl border border-white/8 bg-white/3 p-4">
+      <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+        <div className="relative size-20 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-slate-950/70 sm:size-28">
           <div className="absolute inset-0 grid place-items-center">
             <Music2 className="size-8 text-white/20" />
           </div>
@@ -491,12 +491,12 @@ function RecommendationCard({ item }: { item: Recommendation }) {
           <h3 className="mt-3 line-clamp-2 break-all font-display text-lg font-bold">
             {item.title}
           </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-1 break-words text-xs text-muted-foreground">
             {item.chartType} · {item.difficulty} · 定数 {item.constant}
             {item.version ? ` · ${item.version}` : ''}
           </p>
-          <div className="mt-3 flex items-center gap-3">
-            <div className="rounded-xl bg-cyan-300/10 px-3 py-2 text-center">
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <div className="min-w-0 rounded-xl bg-cyan-300/10 px-3 py-2 text-center">
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 条件增益
               </p>
@@ -505,11 +505,11 @@ function RecommendationCard({ item }: { item: Recommendation }) {
               </p>
             </div>
             {item.currentAchievement && (
-              <div>
+              <div className="min-w-0">
                 <p className="text-[10px] text-muted-foreground">
                   当前 Achievement
                 </p>
-                <p className="font-mono text-sm font-bold text-white">
+                <p className="break-all font-mono text-sm font-bold text-white">
                   {item.currentAchievement}%
                 </p>
               </div>
@@ -518,14 +518,14 @@ function RecommendationCard({ item }: { item: Recommendation }) {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-        <div className="rounded-xl bg-slate-950/45 p-3">
+      <div className="mt-4 grid grid-cols-1 gap-2 text-sm min-[360px]:grid-cols-2">
+        <div className="min-w-0 rounded-xl bg-slate-950/45 p-3">
           <p className="text-xs text-muted-foreground">目标 Achievement</p>
           <p className="mt-1 font-mono font-bold text-white">
             {item.targetAchievement}%
           </p>
         </div>
-        <div className="rounded-xl bg-slate-950/45 p-3">
+        <div className="min-w-0 rounded-xl bg-slate-950/45 p-3">
           <p className="text-xs text-muted-foreground">目标单谱 Rating</p>
           <p className="mt-1 font-bold text-white">{item.targetRating}</p>
         </div>
@@ -650,7 +650,7 @@ export default function RecommendationsPage() {
           </a>
           <div className="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <p className="eyebrow">EXPERIMENTAL V0.8.1</p>
                 <Badge className="bg-amber-300 text-slate-950">实验推荐</Badge>
                 <Badge
@@ -707,12 +707,12 @@ export default function RecommendationsPage() {
               key={bucket}
               className="rounded-2xl border border-white/8 bg-card/55 p-5"
             >
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="font-display text-xl font-bold">
                   {bucket.toUpperCase()}{' '}
                   {fullHistory ? '成绩范围' : '已证明范围'}
                 </h2>
-                <span className="font-bold text-cyan-200">
+                <span className="shrink-0 font-bold text-cyan-200">
                   门槛 {result.thresholds[bucket]}
                 </span>
               </div>
@@ -729,7 +729,7 @@ export default function RecommendationsPage() {
         <section className="mt-8 rounded-3xl border border-fuchsia-300/15 bg-fuchsia-300/5 p-5 sm:p-6">
           <div className="flex items-center gap-2">
             <ShieldAlert className="size-5 text-fuchsia-200" />
-            <div>
+            <div className="min-w-0">
               <p className="eyebrow">PERSONAL PLAYSTYLE PROFILE</p>
               <h2 className="font-display text-lg font-bold">
                 强弱画像与弱势避让
