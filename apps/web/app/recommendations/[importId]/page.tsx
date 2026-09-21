@@ -15,7 +15,7 @@ import {
   Target,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { API_ORIGIN } from '@/lib/api';
+import { apiFetch } from '@/lib/api';
 
 type Evidence = {
   sampleCount: number;
@@ -571,8 +571,8 @@ export default function RecommendationsPage() {
   );
 
   useEffect(() => {
-    fetch(
-      `${API_ORIGIN}/v1/imports/${params.importId}/recommendations?limit_per_bucket=10`,
+    apiFetch(
+      `/v1/imports/${params.importId}/recommendations?limit_per_bucket=10`,
     )
       .then(async (response) => {
         const payload = (await response.json()) as RecommendationResult & {

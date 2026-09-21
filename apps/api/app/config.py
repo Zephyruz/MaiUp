@@ -20,6 +20,11 @@ class Settings:
     intl_overrides_path: Path
     raw_catalog_dir: Path
     import_asset_dir: Path
+    access_keys: str
+    require_access_key: bool
+    cors_origins: tuple[str, ...]
+    enable_image_import: bool
+    sync_catalog_on_start: bool
 
 
 def get_settings() -> Settings:
@@ -46,4 +51,19 @@ def get_settings() -> Settings:
         intl_overrides_path=DATA_ROOT / "overrides" / "international_chart_constants.json",
         raw_catalog_dir=DATA_ROOT / "catalog" / "raw",
         import_asset_dir=DATA_ROOT / "imports",
+        access_keys=os.getenv("MAIUP_ACCESS_KEYS", ""),
+        require_access_key=os.getenv("MAIUP_REQUIRE_ACCESS_KEY", "false").casefold()
+        in {"1", "true", "yes"},
+        cors_origins=tuple(
+            origin.strip()
+            for origin in os.getenv(
+                "MAIUP_CORS_ORIGINS",
+                "http://localhost:3000,http://127.0.0.1:3000",
+            ).split(",")
+            if origin.strip()
+        ),
+        enable_image_import=os.getenv("MAIUP_ENABLE_IMAGE_IMPORT", "true").casefold()
+        in {"1", "true", "yes"},
+        sync_catalog_on_start=os.getenv("MAIUP_SYNC_CATALOG_ON_START", "false").casefold()
+        in {"1", "true", "yes"},
     )

@@ -33,7 +33,9 @@ def _version_policy(session: Session, current_version: str) -> VersionPolicy:
     return VersionPolicy(versions, current_version, b15_version_count=2)
 
 
-def create_or_reuse_import(session: Session, image: InspectedImage) -> PlayerImport | None:
+def create_or_reuse_import(
+    session: Session, image: InspectedImage, owner_id: str = "test-owner"
+) -> PlayerImport | None:
     snapshot = latest_published_snapshot(session)
     if snapshot is None:
         return None
@@ -41,6 +43,7 @@ def create_or_reuse_import(session: Session, image: InspectedImage) -> PlayerImp
         select(PlayerImport)
         .where(
             PlayerImport.image_fingerprint == image.fingerprint,
+            PlayerImport.owner_id == owner_id,
             PlayerImport.catalog_snapshot_id == snapshot.id,
             PlayerImport.status != "confirmed",
             PlayerImport.expires_at > datetime.now(UTC),
@@ -55,6 +58,7 @@ def create_or_reuse_import(session: Session, image: InspectedImage) -> PlayerImp
     now = datetime.now(UTC)
     player_import = PlayerImport(
         id=import_id,
+        owner_id=owner_id,
         source_type="b50_image",
         status="needs_review",
         coverage="best50_only",
@@ -84,9 +88,11 @@ def create_or_reuse_import(session: Session, image: InspectedImage) -> PlayerImp
     return player_import
 
 
-def get_import(session: Session, import_id: str) -> dict[str, object] | None:
+def get_import(
+    session: Session, import_id: str, owner_id: str = "test-owner"
+) -> dict[str, object] | None:
     player_import = session.get(PlayerImport, import_id)
-    if player_import is None:
+    if player_import is None or player_import.owner_id != owner_id:
         return None
     entries = list(
         session.scalars(
@@ -115,9 +121,10 @@ def update_entry(
     import_id: str,
     slot: int,
     payload: ImportEntryUpdate,
+    owner_id: str = "test-owner",
 ) -> dict[str, object]:
     player_import = session.get(PlayerImport, import_id)
-    if player_import is None:
+    if player_import is None or player_import.owner_id != owner_id:
         raise PlayerImportError("Import not found")
     if player_import.status == "confirmed":
         raise PlayerImportError("Confirmed imports are immutable")
@@ -195,15 +202,17 @@ def update_entry(
     entry.issue_code = "rating_mismatch" if mismatch else None
     entry.updated_at = datetime.now(UTC)
     session.commit()
-    result = get_import(session, import_id)
+    result = get_import(session, import_id, owner_id)
     if result is None:
         raise PlayerImportError("Import disappeared after update")
     return result
 
 
-def confirm_import(session: Session, import_id: str) -> dict[str, object]:
+def confirm_import(
+    session: Session, import_id: str, owner_id: str = "test-owner"
+) -> dict[str, object]:
     player_import = session.get(PlayerImport, import_id)
-    if player_import is None:
+    if player_import is None or player_import.owner_id != owner_id:
         raise PlayerImportError("Import not found")
     unresolved = session.scalar(
         select(func.count())
@@ -218,7 +227,7 @@ def confirm_import(session: Session, import_id: str) -> dict[str, object]:
     player_import.status = "confirmed"
     player_import.confirmed_at = datetime.now(UTC)
     session.commit()
-    result = get_import(session, import_id)
+    result = get_import(session, import_id, owner_id)
     if result is None:
         raise PlayerImportError("Import disappeared after confirmation")
     return result

@@ -82,6 +82,8 @@ Recommended manual checks for a new image:
 
 - [`docs/research.en.md`](docs/research.en.md): source evaluation, International rules, data-access constraints, and recommendation research.
 - [`docs/architecture.en.md`](docs/architecture.en.md): system boundaries, data model, OCR workflow, recommendation model, privacy, and validation gates.
+- [`docs/public-hosting-research.en.md`](docs/public-hosting-research.en.md): evidence-based public-hosting architecture, costs, browser constraints, isolation requirements, and phased release gates.
+- [`docs/free-hosting-mvp.en.md`](docs/free-hosting-mvp.en.md): free-hosted friends-pilot layout, access-key isolation, required secrets, and deployment validation gates.
 - [`docs/score-import-v1.example.json`](docs/score-import-v1.example.json): minimal complete-score import example.
 
 ## Project scope

@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { API_ORIGIN } from '@/lib/api';
+import { apiFetch } from '@/lib/api';
 
 type ScorePreview = {
   title: string;
@@ -250,7 +250,7 @@ export default function ScoreImportReportPage() {
   const [imageState, setImageState] = useState<'idle' | 'generating' | 'error'>('idle');
 
   useEffect(() => {
-    fetch(`${API_ORIGIN}/v1/imports/scores/${params.importId}`)
+    apiFetch(`/v1/imports/scores/${params.importId}`)
       .then(async (response) => {
         const payload = (await response.json()) as ScoreImportReport & { detail?: string };
         if (!response.ok) throw new Error(payload.detail ?? `读取失败 (${response.status})`);

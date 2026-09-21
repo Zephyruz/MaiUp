@@ -230,6 +230,7 @@ def _create_best50_import(
     catalog: CatalogSnapshot,
     matched_by_chart: dict[str, PlayerScore],
     created_at: datetime,
+    owner_id: str,
 ) -> bool:
     chart_ids = set(matched_by_chart)
     if not chart_ids:
@@ -277,6 +278,7 @@ def _create_best50_import(
     session.add(
         PlayerImport(
             id=import_id,
+            owner_id=owner_id,
             source_type="dxnet_calculated_b50",
             status="confirmed",
             coverage="full_scores",
@@ -337,6 +339,7 @@ def _create_official_best50_import(
     source_song_candidates: dict[str, set[str]],
     title_type_song_candidates: dict[tuple[str, str], set[str]],
     created_at: datetime,
+    owner_id: str,
 ) -> bool:
     grouped = {
         bucket: sorted(
@@ -420,6 +423,7 @@ def _create_official_best50_import(
     session.add(
         PlayerImport(
             id=import_id,
+            owner_id=owner_id,
             source_type="dxnet_official_b50",
             status="confirmed",
             coverage="full_scores",
@@ -469,7 +473,7 @@ def _create_official_best50_import(
 
 
 def import_complete_scores(
-    session: Session, payload: CompleteScoreImportRequest
+    session: Session, payload: CompleteScoreImportRequest, owner_id: str = "test-owner"
 ) -> dict[str, object]:
     catalog = latest_published_snapshot(session)
     if catalog is None:
@@ -583,6 +587,7 @@ def import_complete_scores(
     imported_at = datetime.now(UTC)
     snapshot = PlayerScoreSnapshot(
         id=import_id,
+        owner_id=owner_id,
         schema_version=payload.schema_version,
         source_region=payload.source_region,
         source_name=payload.source_name,
@@ -610,6 +615,7 @@ def import_complete_scores(
         source_song_candidates=source_song_candidates,
         title_type_song_candidates=title_type_song_candidates,
         created_at=imported_at,
+        owner_id=owner_id,
     )
     if not official_best50_created:
         _create_best50_import(
@@ -618,14 +624,17 @@ def import_complete_scores(
             catalog=catalog,
             matched_by_chart=matched_by_chart,
             created_at=imported_at,
+            owner_id=owner_id,
         )
     session.commit()
-    return get_complete_score_import(session, import_id)
+    return get_complete_score_import(session, import_id, owner_id)
 
 
-def get_complete_score_import(session: Session, import_id: str) -> dict[str, object]:
+def get_complete_score_import(
+    session: Session, import_id: str, owner_id: str = "test-owner"
+) -> dict[str, object]:
     snapshot = session.get(PlayerScoreSnapshot, import_id)
-    if snapshot is None:
+    if snapshot is None or snapshot.owner_id != owner_id:
         raise CompleteScoreImportError("Complete score import not found")
     scores = list(
         session.scalars(
@@ -654,6 +663,8 @@ def get_complete_score_import(session: Session, import_id: str) -> dict[str, obj
     )[:12]
     denominator = max(snapshot.supplied_count - snapshot.duplicate_count, 1)
     best50_import = session.get(PlayerImport, import_id)
+    if best50_import is not None and best50_import.owner_id != owner_id:
+        best50_import = None
     best50_entries = (
         list(
             session.scalars(

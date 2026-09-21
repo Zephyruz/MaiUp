@@ -16,7 +16,11 @@ from app.db.models import (
     PlayerScore,
     Song,
 )
-from app.imports.complete_scores import get_complete_score_import, import_complete_scores
+from app.imports.complete_scores import (
+    CompleteScoreImportError,
+    get_complete_score_import,
+    import_complete_scores,
+)
 
 
 @pytest.fixture
@@ -123,6 +127,26 @@ def test_import_matches_exact_chart_and_reports_coverage(session: Session) -> No
     assert result["coverageRatio"] == Decimal("0.5000")
     assert result["issues"][0]["issueCode"] == "chart_not_found"
     assert get_complete_score_import(session, result["id"]) == result
+
+
+def test_complete_import_is_hidden_from_another_owner(session: Session) -> None:
+    result = import_complete_scores(
+        session,
+        payload(
+            [
+                {
+                    "title": "Test Song",
+                    "chartType": "dx",
+                    "difficulty": "master",
+                    "achievement": "100.0000",
+                }
+            ]
+        ),
+        owner_id="alice",
+    )
+
+    with pytest.raises(CompleteScoreImportError, match="not found"):
+        get_complete_score_import(session, result["id"], owner_id="bob")
 
 
 def test_duplicate_chart_keeps_highest_achievement(session: Session) -> None:

@@ -543,9 +543,10 @@ def build_recommendations(
     import_id: str,
     *,
     limit_per_bucket: int = 10,
+    owner_id: str = "test-owner",
 ) -> dict[str, object]:
     player_import = session.get(PlayerImport, import_id)
-    if player_import is None:
+    if player_import is None or player_import.owner_id != owner_id:
         raise RecommendationError("Import not found")
     if player_import.status != "confirmed":
         raise RecommendationError("Confirm all 50 entries before generating recommendations")
@@ -573,6 +574,8 @@ def build_recommendations(
     }
     policy = _version_policy(session, snapshot)
     score_snapshot = session.get(PlayerScoreSnapshot, import_id)
+    if score_snapshot is not None and score_snapshot.owner_id != owner_id:
+        score_snapshot = None
     b50_samples = [
         PerformanceSample(
             chart_id=entry.chart_id,

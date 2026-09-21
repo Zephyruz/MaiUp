@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, File, HTTPException, Path, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
@@ -19,10 +20,12 @@ from app.api.schemas import (
     RatingRequest,
     RatingResponse,
 )
+from app.auth import CurrentPrincipal
 from app.catalog.queries import catalog_status, chart_constant, search_charts, search_songs
+from app.config import get_settings
 from app.db.base import Base
-from app.db.models import PlayerImport
-from app.db.session import engine, get_db
+from app.db.models import PlayerImport, PlayerScoreSnapshot
+from app.db.session import SessionLocal, engine, ensure_local_owner_columns, get_db
 from app.imports.asset_store import delete_source_image, source_image_path, store_source_image
 from app.imports.complete_scores import (
     CompleteScoreImportError,
@@ -34,7 +37,6 @@ from app.imports.image_inspection import (
     ImageInspectionError,
     inspect_b50_image,
 )
-from app.imports.ocr import ocr_result_is_current, recognize_import
 from app.imports.service import (
     PlayerImportError,
     confirm_import,
@@ -49,6 +51,15 @@ from app.recommendations.service import RecommendationError, build_recommendatio
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_local_owner_columns()
+    settings = get_settings()
+    if settings.sync_catalog_on_start:
+        from app.jobs.sync_catalog import sync_catalog
+
+        with SessionLocal() as session:
+            ready = catalog_status(session).get("ready")
+        if not ready:
+            await sync_catalog()
     yield
 
 
@@ -59,10 +70,10 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=list(get_settings().cors_origins),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 DatabaseSession = Annotated[Session, Depends(get_db)]
@@ -71,6 +82,41 @@ DatabaseSession = Annotated[Session, Depends(get_db)]
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/v1/session")
+def session_status(principal: CurrentPrincipal) -> dict[str, object]:
+    return {
+        "status": "ok",
+        "displayName": principal.display_name,
+        "imageImportEnabled": get_settings().enable_image_import,
+    }
+
+
+@app.get("/v1/me/imports")
+def recent_imports(
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> list[dict[str, object]]:
+    snapshots = db.scalars(
+        select(PlayerScoreSnapshot)
+        .where(PlayerScoreSnapshot.owner_id == principal.owner_id)
+        .order_by(PlayerScoreSnapshot.imported_at.desc())
+        .limit(10)
+    ).all()
+    results: list[dict[str, object]] = []
+    for snapshot in snapshots:
+        player_import = db.get(PlayerImport, snapshot.id)
+        results.append(
+            {
+                "id": snapshot.id,
+                "importedAt": snapshot.imported_at,
+                "matchedCount": snapshot.matched_count,
+                "b50Generated": player_import is not None,
+                "b50Source": player_import.source_type if player_import else None,
+            }
+        )
+    return results
 
 
 @app.get("/v1/catalog/status")
@@ -124,27 +170,39 @@ def calculate_rating(payload: RatingRequest) -> RatingResponse:
 
 @app.post("/v1/imports/scores", response_model=CompleteScoreImportResponse)
 def create_complete_score_import(
-    payload: CompleteScoreImportRequest, db: DatabaseSession
+    payload: CompleteScoreImportRequest,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
 ) -> dict[str, object]:
     try:
-        return import_complete_scores(db, payload)
+        return import_complete_scores(db, payload, principal.owner_id)
     except CompleteScoreImportError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get("/v1/imports/scores/{import_id}", response_model=CompleteScoreImportResponse)
-def read_complete_score_import(import_id: str, db: DatabaseSession) -> dict[str, object]:
+def read_complete_score_import(
+    import_id: str, principal: CurrentPrincipal, db: DatabaseSession
+) -> dict[str, object]:
     try:
-        return get_complete_score_import(db, import_id)
+        return get_complete_score_import(db, import_id, principal.owner_id)
     except CompleteScoreImportError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.post("/v1/imports/b50/inspect", response_model=B50InspectionResponse)
 async def inspect_b50(
+    principal: CurrentPrincipal,
     db: DatabaseSession,
     image: Annotated[UploadFile, File()],
 ) -> B50InspectionResponse:
+    if not get_settings().enable_image_import:
+        raise HTTPException(
+            status_code=503,
+            detail="云端测试版暂未启用图片 OCR，请使用 DX NET JSON 导入",
+        )
+    from app.imports.ocr import ocr_result_is_current, recognize_import
+
     content = await image.read(MAX_IMAGE_BYTES + 1)
     await image.close()
     if len(content) > MAX_IMAGE_BYTES:
@@ -153,14 +211,14 @@ async def inspect_b50(
         inspected = inspect_b50_image(content)
     except ImageInspectionError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    player_import = create_or_reuse_import(db, inspected)
+    player_import = create_or_reuse_import(db, inspected, principal.owner_id)
     counts = {"recognized": 0, "matched": 0}
     if player_import:
         created = source_image_path(player_import.id) is None
         source_path = store_source_image(player_import.id, content)
         player_import.source_image_stored = True
         db.commit()
-        state = get_import(db, player_import.id)
+        state = get_import(db, player_import.id, principal.owner_id)
         entries = state["entries"] if state else []
         draft_is_unedited = all(entry.updated_at is None for entry in entries)
         if created or (draft_is_unedited and not ocr_result_is_current(source_path)):
@@ -192,18 +250,22 @@ async def inspect_b50(
 
 
 @app.get("/v1/imports/{import_id}/asset")
-def read_import_asset(import_id: str, db: DatabaseSession) -> FileResponse:
+def read_import_asset(
+    import_id: str, principal: CurrentPrincipal, db: DatabaseSession
+) -> FileResponse:
     player_import = db.get(PlayerImport, import_id)
     path = source_image_path(import_id)
-    if player_import is None or path is None:
+    if player_import is None or player_import.owner_id != principal.owner_id or path is None:
         raise HTTPException(status_code=404, detail="Temporary source image not found")
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @app.delete("/v1/imports/{import_id}/asset", status_code=204)
-def remove_import_asset(import_id: str, db: DatabaseSession) -> Response:
+def remove_import_asset(
+    import_id: str, principal: CurrentPrincipal, db: DatabaseSession
+) -> Response:
     player_import = db.get(PlayerImport, import_id)
-    if player_import is None:
+    if player_import is None or player_import.owner_id != principal.owner_id:
         raise HTTPException(status_code=404, detail="Import not found")
     delete_source_image(import_id)
     player_import.source_image_stored = False
@@ -212,8 +274,10 @@ def remove_import_asset(import_id: str, db: DatabaseSession) -> Response:
 
 
 @app.get("/v1/imports/{import_id}", response_model=PlayerImportResponse)
-def read_import(import_id: str, db: DatabaseSession) -> dict[str, object]:
-    result = get_import(db, import_id)
+def read_import(
+    import_id: str, principal: CurrentPrincipal, db: DatabaseSession
+) -> dict[str, object]:
+    result = get_import(db, import_id, principal.owner_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Import not found")
     return result
@@ -222,11 +286,17 @@ def read_import(import_id: str, db: DatabaseSession) -> dict[str, object]:
 @app.get("/v1/imports/{import_id}/recommendations")
 def read_recommendations(
     import_id: str,
+    principal: CurrentPrincipal,
     db: DatabaseSession,
     limit_per_bucket: Annotated[int, Query(ge=1, le=12)] = 10,
 ) -> dict[str, object]:
     try:
-        return build_recommendations(db, import_id, limit_per_bucket=limit_per_bucket)
+        return build_recommendations(
+            db,
+            import_id,
+            limit_per_bucket=limit_per_bucket,
+            owner_id=principal.owner_id,
+        )
     except RecommendationError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -239,17 +309,20 @@ def patch_import_entry(
     import_id: str,
     slot: Annotated[int, Path(ge=1, le=50)],
     payload: ImportEntryUpdate,
+    principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict[str, object]:
     try:
-        return update_entry(db, import_id, slot, payload)
+        return update_entry(db, import_id, slot, payload, principal.owner_id)
     except PlayerImportError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/v1/imports/{import_id}/confirm", response_model=PlayerImportResponse)
-def confirm_player_import(import_id: str, db: DatabaseSession) -> dict[str, object]:
+def confirm_player_import(
+    import_id: str, principal: CurrentPrincipal, db: DatabaseSession
+) -> dict[str, object]:
     try:
-        return confirm_import(db, import_id)
+        return confirm_import(db, import_id, principal.owner_id)
     except PlayerImportError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

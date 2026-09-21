@@ -7,7 +7,7 @@ import {
   ShieldCheck,
   TriangleAlert,
 } from 'lucide-react';
-import { API_ORIGIN } from '@/lib/api';
+import { apiFetch } from '@/lib/api';
 import {
   DXNET_HANDOFF_CHANNEL,
   DXNET_HANDOFF_VERSION,
@@ -62,7 +62,7 @@ export default function DxnetImportPage() {
       );
 
       try {
-        const response = await fetch(`${API_ORIGIN}/v1/imports/scores`, {
+        const response = await apiFetch('/v1/imports/scores', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(handoff.payload),

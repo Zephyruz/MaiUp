@@ -179,8 +179,10 @@ class PopulationStatistic(Base):
 
 class PlayerImport(Base):
     __tablename__ = "player_imports"
+    __table_args__ = (Index("ix_player_import_owner_created", "owner_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True)
     source_type: Mapped[str] = mapped_column(String(30), default="b50_image")
     status: Mapped[str] = mapped_column(String(30), index=True)
     coverage: Mapped[str] = mapped_column(String(30), default="best50_only")
@@ -222,8 +224,12 @@ class ImportEntry(Base):
 
 class PlayerScoreSnapshot(Base):
     __tablename__ = "player_score_snapshots"
+    __table_args__ = (
+        Index("ix_player_score_snapshot_owner_imported", "owner_id", "imported_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True)
     schema_version: Mapped[int] = mapped_column(Integer)
     source_region: Mapped[str] = mapped_column(String(20))
     source_name: Mapped[str] = mapped_column(String(80))

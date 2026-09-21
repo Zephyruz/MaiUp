@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: maiup-api
+    runtime: python
+    plan: free
+    buildCommand: pip install ./apps/api
+    startCommand: uvicorn app.main:app --app-dir apps/api --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: MAIUP_DATABASE_URL
+        sync: false
+      - key: MAIUP_ACCESS_KEYS
+        sync: false
+      - key: MAIUP_REQUIRE_ACCESS_KEY
+        value: "true"
+      - key: MAIUP_CORS_ORIGINS
+        sync: false
+      - key: MAIUP_ENABLE_IMAGE_IMPORT
+        value: "false"
+      - key: MAIUP_SYNC_CATALOG_ON_START
+        value: "true"

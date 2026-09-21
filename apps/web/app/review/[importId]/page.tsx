@@ -1,5 +1,7 @@
 'use client';
 
+/* oxlint-disable next/no-html-link-for-pages -- Full navigation preserves the access-key session. */
+
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import {
@@ -18,7 +20,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { API_ORIGIN } from '@/lib/api';
+import { API_ORIGIN, apiFetch } from '@/lib/api';
 
 type ImportEntry = {
   slot: number;
@@ -91,7 +93,7 @@ export default function ReviewPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_ORIGIN}/v1/imports/${importId}`)
+    apiFetch(`/v1/imports/${importId}`)
       .then((response) => readJson<PlayerImport>(response))
       .then(setPlayerImport)
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : '导入读取失败'));
@@ -157,8 +159,8 @@ export default function ReviewPage() {
     setBusy(true);
     setMessage(null);
     try {
-      const response = await fetch(
-        `${API_ORIGIN}/v1/imports/${importId}/entries/${entry.slot}`,
+      const response = await apiFetch(
+        `/v1/imports/${importId}/entries/${entry.slot}`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -196,7 +198,7 @@ export default function ReviewPage() {
     setBusy(true);
     setMessage(null);
     try {
-      const response = await fetch(`${API_ORIGIN}/v1/imports/${importId}/confirm`, {
+      const response = await apiFetch(`/v1/imports/${importId}/confirm`, {
         method: 'POST',
       });
       const result = await readJson<PlayerImport>(response);
@@ -213,7 +215,7 @@ export default function ReviewPage() {
     setBusy(true);
     setMessage(null);
     try {
-      const response = await fetch(`${API_ORIGIN}/v1/imports/${importId}/asset`, {
+      const response = await apiFetch(`/v1/imports/${importId}/asset`, {
         method: 'DELETE',
       });
       if (!response.ok) throw new Error(`删除失败 (${response.status})`);

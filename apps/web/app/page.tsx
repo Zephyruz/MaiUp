@@ -17,7 +17,12 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { API_ORIGIN } from '@/lib/api';
+import {
+  API_ORIGIN,
+  apiFetch,
+  clearAccessKey,
+  setAccessKey,
+} from '@/lib/api';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 const phases = [
@@ -47,6 +52,14 @@ type ScoreImportResult = {
   duplicateCount: number;
   coverageRatio: string;
   issues: Array<{ sourceIndex: number; title: string; issueCode: string }>;
+};
+
+type RecentImport = {
+  id: string;
+  importedAt: string;
+  matchedCount: number;
+  b50Generated: boolean;
+  b50Source: string | null;
 };
 
 async function readApiJson<T extends object>(
@@ -95,6 +108,44 @@ export default function Home() {
   const [bookmarkletMessage, setBookmarkletMessage] = useState<string | null>(
     null,
   );
+  const [authState, setAuthState] = useState<'loading' | 'required' | 'ready'>(
+    'loading',
+  );
+  const [accessInput, setAccessInput] = useState('');
+  const [sessionName, setSessionName] = useState('');
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [recentImports, setRecentImports] = useState<RecentImport[]>([]);
+  const [imageImportEnabled, setImageImportEnabled] = useState(true);
+
+  async function authenticate(candidate?: string) {
+    if (candidate !== undefined) setAccessKey(candidate);
+    await Promise.resolve();
+    setAuthMessage(null);
+    try {
+      const response = await apiFetch('/v1/session');
+      const payload = (await response.json()) as {
+        displayName?: string;
+        imageImportEnabled?: boolean;
+        detail?: string;
+      };
+      if (!response.ok) throw new Error(payload.detail ?? '访问码无效');
+      setSessionName(payload.displayName ?? 'MaiUp 玩家');
+      const imageEnabled = payload.imageImportEnabled !== false;
+      setImageImportEnabled(imageEnabled);
+      if (!imageEnabled) setDataSource('account');
+      setAuthState('ready');
+      const recentResponse = await apiFetch('/v1/me/imports');
+      if (recentResponse.ok) {
+        setRecentImports((await recentResponse.json()) as RecentImport[]);
+      }
+    } catch (error: unknown) {
+      clearAccessKey();
+      setAuthState('required');
+      if (candidate !== undefined) {
+        setAuthMessage(error instanceof Error ? error.message : '访问码无效');
+      }
+    }
+  }
 
   async function copyBookmarklet() {
     try {
@@ -103,23 +154,12 @@ export default function Home() {
       });
       if (!response.ok) throw new Error('无法加载导出脚本');
       const source = await response.text();
-      const isLocalPreview = ['localhost', '127.0.0.1'].includes(
-        window.location.hostname,
-      );
       const configuredSource = `globalThis.__MAIUP_IMPORT_ORIGIN__=${JSON.stringify(
-        isLocalPreview ? window.location.origin : 'http://localhost:3000',
+        window.location.origin,
       )};${source}`;
-      const bookmarklet = isLocalPreview
-        ? `javascript:${configuredSource.replace(/\r?\n/g, ' ')}`
-        : `javascript:(()=>{globalThis.__MAIUP_IMPORT_ORIGIN__='http://localhost:3000';const s=document.createElement('script');s.src=${JSON.stringify(
-            new URL('/maiup-dxnet-export.js', window.location.origin).href,
-          )}+'?v='+Date.now();s.onerror=()=>alert('MaiUp exporter failed to load.');document.head.append(s)})()`;
+      const bookmarklet = `javascript:${configuredSource.replace(/\r?\n/g, ' ')}`;
       await navigator.clipboard.writeText(bookmarklet);
-      setBookmarkletMessage(
-        isLocalPreview
-          ? '已复制自动导入书签。保存后，在已登录的 DX NET 页面点击一次。'
-          : '已复制书签。运行时会连接本机 http://localhost:3000。',
-      );
+      setBookmarkletMessage('已复制自动导入书签。保存后，在已登录的 DX NET 页面点击一次。');
     } catch (error: unknown) {
       setBookmarkletMessage(
         error instanceof Error ? error.message : '复制失败',
@@ -136,7 +176,7 @@ export default function Home() {
       if (file.size > 5 * 1024 * 1024)
         throw new Error('JSON 文件不能超过 5 MB');
       const payload: unknown = JSON.parse(await file.text());
-      const response = await fetch(`${API_ORIGIN}/v1/imports/scores`, {
+      const response = await apiFetch('/v1/imports/scores', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -171,7 +211,7 @@ export default function Home() {
     const body = new FormData();
     body.append('image', selectedFile);
     try {
-      const response = await fetch(`${API_ORIGIN}/v1/imports/b50/inspect`, {
+      const response = await apiFetch('/v1/imports/b50/inspect', {
         method: 'POST',
         body,
       });
@@ -200,6 +240,10 @@ export default function Home() {
       setUploadMessage(localApiError(error, '无法连接本地图片检查服务'));
     }
   }
+
+  useEffect(() => {
+    queueMicrotask(() => void authenticate());
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -255,6 +299,42 @@ export default function Home() {
     return () => lifecycle.abort();
   }, []);
 
+  if (authState !== 'ready') {
+    return (
+      <main className="grid min-h-screen place-items-center bg-background p-6 text-foreground">
+        <form
+          className="w-full max-w-md rounded-3xl border border-cyan-200/15 bg-card p-7 shadow-2xl"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void authenticate(accessInput);
+          }}
+        >
+          <LockKeyhole className="size-9 text-cyan-200" />
+          <h1 className="mt-4 font-display text-3xl font-bold">进入 MaiUp</h1>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            输入分配给你的个人访问码。每个访问码只会看到自己的 B50 和推荐。
+          </p>
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={accessInput}
+            onChange={(event) => setAccessInput(event.target.value)}
+            placeholder="个人访问码"
+            className="mt-6 min-h-12 w-full rounded-xl border border-white/12 bg-slate-950/50 px-4 outline-none focus:border-cyan-300"
+          />
+          {authMessage && <p className="mt-3 text-sm text-rose-300">{authMessage}</p>}
+          <Button
+            type="submit"
+            disabled={authState === 'loading' || !accessInput.trim()}
+            className="mt-5 min-h-12 w-full rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+          >
+            {authState === 'loading' ? '正在连接…' : '进入'}
+          </Button>
+        </form>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen overflow-hidden bg-background text-foreground">
       <div className="mx-auto min-h-screen max-w-[1500px] px-4 py-4 sm:px-6 lg:px-8">
@@ -273,6 +353,17 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                clearAccessKey();
+                setAuthState('required');
+                setAccessInput('');
+              }}
+              className="rounded-lg px-2 py-1 text-xs text-muted-foreground hover:text-white"
+            >
+              {sessionName} · 退出
+            </button>
             <Badge
               variant="outline"
               className="hidden border-cyan-300/25 bg-cyan-300/8 text-cyan-100 sm:inline-flex"
@@ -356,6 +447,36 @@ export default function Home() {
               </div>
             </div>
 
+            {recentImports.length > 0 && (
+              <div className="mb-5 rounded-2xl border border-cyan-200/15 bg-cyan-300/5 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-cyan-100">最近一次 B50</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {new Date(recentImports[0].importedAt).toLocaleString()} · 匹配{' '}
+                      {recentImports[0].matchedCount} 张谱面
+                    </p>
+                  </div>
+                  {recentImports[0].b50Generated && (
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <a
+                        href={`/scores/${recentImports[0].id}`}
+                        className="rounded-xl border border-cyan-200/20 px-3 py-2 text-sm text-cyan-100"
+                      >
+                        查看 B50
+                      </a>
+                      <a
+                        href={`/recommendations/${recentImports[0].id}`}
+                        className="rounded-xl bg-cyan-300 px-3 py-2 text-sm font-bold text-slate-950"
+                      >
+                        查看推荐
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <Tabs
               value={dataSource}
               onValueChange={(value) => {
@@ -364,12 +485,14 @@ export default function Home() {
               className="gap-4"
             >
               <TabsList className="h-auto w-full justify-start rounded-2xl border border-white/8 bg-card/55 p-1.5 sm:w-auto">
-                <TabsTrigger
-                  value="image"
-                  className="min-h-11 gap-2 rounded-xl px-4 data-active:bg-white/10 data-active:text-white"
-                >
-                  <FileImage className="size-4" /> 仅导入 B50 图片
-                </TabsTrigger>
+                {imageImportEnabled && (
+                  <TabsTrigger
+                    value="image"
+                    className="min-h-11 gap-2 rounded-xl px-4 data-active:bg-white/10 data-active:text-white"
+                  >
+                    <FileImage className="size-4" /> 仅导入 B50 图片
+                  </TabsTrigger>
+                )}
                 <TabsTrigger
                   value="account"
                   className="min-h-11 gap-2 rounded-xl px-4 data-active:bg-white/10 data-active:text-white"
@@ -378,7 +501,8 @@ export default function Home() {
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="image">
+              {imageImportEnabled && (
+                <TabsContent value="image">
                 <div className="grid-lines relative overflow-hidden rounded-[2rem] border border-cyan-200/15 bg-card/70 p-5 shadow-2xl shadow-cyan-950/20 sm:p-8">
                   <div className="relative z-10">
                     <div className="flex items-start justify-between gap-4">
@@ -462,7 +586,8 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-              </TabsContent>
+                </TabsContent>
+              )}
 
               <TabsContent value="account">
                 <div className="rounded-[2rem] border border-fuchsia-300/15 bg-card/70 p-6 sm:p-8">
@@ -524,7 +649,7 @@ export default function Home() {
                         >
                           {scoreImportMessage ??
                             bookmarkletMessage ??
-                            '先启动本机前后端，再到已登录的 DX NET 页面运行书签。'}
+                            '到已登录的 DX NET 页面运行书签；失败时可上传导出的 JSON。'}
                         </p>
                       </div>
                       <div className="mt-4 rounded-2xl border border-white/8 bg-white/3 p-4">
@@ -533,7 +658,7 @@ export default function Home() {
                         </p>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
                           将脚本保存成书签。在已登录的 International DX NET
-                          页面点击一次，它会先打开本机 MaiUp，再读取全部 5
+                          页面点击一次，它会先打开 MaiUp，再读取全部 5
                           个难度、官网 B35/B15
                           和相关谱面的最后游玩时间，自动导入并跳转分析。若弹窗、本机服务或通信失败，会自动下载
                           JSON；账号凭据不会离开 DX
