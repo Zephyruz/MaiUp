@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import CompleteScoreImportRequest
@@ -26,6 +26,13 @@ from app.imports.complete_scores import (
 @pytest.fixture
 def session() -> Session:
     engine = create_engine("sqlite:///:memory:")
+
+    @event.listens_for(engine, "connect")
+    def enable_foreign_keys(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(engine)
     with Session(engine, expire_on_commit=False) as db:
         db.add(
@@ -38,6 +45,7 @@ def session() -> Session:
                 license_note="test fixture",
             )
         )
+        db.flush()
         db.add(
             CatalogSnapshot(
                 id="snapshot",
@@ -54,6 +62,7 @@ def session() -> Session:
                 validation_report="{}",
             )
         )
+        db.flush()
         db.add(
             Song(
                 id="song",
@@ -65,7 +74,9 @@ def session() -> Session:
                 is_locked=False,
             )
         )
+        db.flush()
         db.add(Chart(id="chart", song_id="song", chart_type="dx", difficulty="master"))
+        db.flush()
         db.add(
             ChartRevision(
                 snapshot_id="snapshot",
@@ -209,6 +220,7 @@ def test_import_disambiguates_same_title_from_distinctive_difficulty_level(
                 is_locked=False,
             )
         )
+    session.flush()
     for song_id, advanced_level in (("link-a", "8+"), ("link-b", "8")):
         for difficulty, level in (("advanced", advanced_level), ("master", "12")):
             chart_id = f"{song_id}-{difficulty}"
@@ -220,6 +232,7 @@ def test_import_disambiguates_same_title_from_distinctive_difficulty_level(
                     difficulty=difficulty,
                 )
             )
+            session.flush()
             session.add(
                 ChartRevision(
                     snapshot_id="snapshot",
@@ -287,6 +300,7 @@ def test_import_disambiguates_same_title_by_dx_score_max(session: Session) -> No
                 is_locked=False,
             )
         )
+        session.flush()
         chart_id = f"{song_id}-basic"
         session.add(
             Chart(
@@ -296,6 +310,7 @@ def test_import_disambiguates_same_title_by_dx_score_max(session: Session) -> No
                 difficulty="basic",
             )
         )
+        session.flush()
         session.add(
             ChartRevision(
                 snapshot_id="snapshot",

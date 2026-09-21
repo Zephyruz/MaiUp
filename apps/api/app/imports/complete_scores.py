@@ -293,6 +293,7 @@ def _create_best50_import(
             confirmed_at=created_at,
         )
     )
+    session.flush()
     entries: list[ImportEntry] = []
     for bucket, ranked_scores, slot_offset in (
         ("b35", best50.b35, 0),
@@ -438,6 +439,7 @@ def _create_official_best50_import(
             confirmed_at=created_at,
         )
     )
+    session.flush()
     entries: list[ImportEntry] = []
     for item, chart_id in resolved:
         chart, song, revision, constant = metadata[chart_id]
@@ -601,7 +603,9 @@ def import_complete_scores(
         duplicate_count=duplicate_count,
     )
     session.add(snapshot)
+    session.flush()
     session.add_all(stored)
+    session.flush()
     official_best50_created = bool(payload.official_best50) and _create_official_best50_import(
         session,
         import_id=import_id,
