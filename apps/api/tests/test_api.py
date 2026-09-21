@@ -1,4 +1,3 @@
-import asyncio
 from io import BytesIO
 from threading import Event
 
@@ -18,10 +17,11 @@ def test_health_is_available_while_catalog_sync_runs(monkeypatch) -> None:
     from app.jobs import sync_catalog as sync_catalog_job
 
     started = Event()
+    release = Event()
 
     async def blocked_sync() -> None:
         started.set()
-        await asyncio.Event().wait()
+        release.wait(timeout=2)
 
     monkeypatch.setenv("MAIUP_SYNC_CATALOG_ON_START", "true")
     monkeypatch.setattr(main, "catalog_status", lambda _: {"ready": False})
@@ -29,7 +29,10 @@ def test_health_is_available_while_catalog_sync_runs(monkeypatch) -> None:
 
     with TestClient(app) as client:
         assert started.wait(timeout=1)
-        assert client.get("/health").json() == {"status": "ok"}
+        try:
+            assert client.get("/health").json() == {"status": "ok"}
+        finally:
+            release.set()
 
 
 def test_rating_endpoint_uses_decimal_boundaries() -> None:

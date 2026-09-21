@@ -56,7 +56,7 @@ async def _sync_catalog_in_background() -> None:
     from app.jobs.sync_catalog import sync_catalog
 
     try:
-        await sync_catalog()
+        await asyncio.to_thread(asyncio.run, sync_catalog())
     except asyncio.CancelledError:
         raise
     except Exception:
