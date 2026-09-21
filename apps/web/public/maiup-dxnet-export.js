@@ -26,10 +26,11 @@ void (async () => {
       const url = new URL(
         typeof configured === 'string' ? configured : DEFAULT_MAIUP_ORIGIN,
       );
-      if (
-        url.protocol !== 'http:' ||
-        !['localhost', '127.0.0.1'].includes(url.hostname)
-      ) {
+      const isLocalOrigin =
+        url.protocol === 'http:' &&
+        ['localhost', '127.0.0.1'].includes(url.hostname);
+      const isHostedOrigin = url.protocol === 'https:';
+      if (!isLocalOrigin && !isHostedOrigin) {
         return DEFAULT_MAIUP_ORIGIN;
       }
       return url.origin;
@@ -139,7 +140,7 @@ void (async () => {
     if (!ready || handoffWindow.closed) {
       return {
         ok: false,
-        message: 'MaiUp did not become ready on localhost.',
+        message: 'MaiUp did not become ready.',
       };
     }
     handoffWindow.postMessage(
