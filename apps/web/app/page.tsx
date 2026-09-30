@@ -17,12 +17,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import {
-  API_ORIGIN,
-  apiFetch,
-  clearAccessKey,
-  setAccessKey,
-} from '@/lib/api';
+import { apiFetch, clearAccessKey, setAccessKey } from '@/lib/api';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 const phases = [
@@ -108,6 +103,8 @@ export default function Home() {
   const [bookmarkletMessage, setBookmarkletMessage] = useState<string | null>(
     null,
   );
+  const [bookmarklet, setBookmarklet] = useState<string | null>(null);
+  const [showManualBookmarklet, setShowManualBookmarklet] = useState(false);
   const [authState, setAuthState] = useState<'loading' | 'required' | 'ready'>(
     'loading',
   );
@@ -120,9 +117,20 @@ export default function Home() {
   async function authenticate(candidate?: string) {
     if (candidate !== undefined) setAccessKey(candidate);
     await Promise.resolve();
+    setAuthState('loading');
     setAuthMessage(null);
     try {
-      const response = await apiFetch('/v1/session');
+      const response = await apiFetch(
+        '/v1/session',
+        {},
+        {
+          onWaiting: () =>
+            setAuthMessage(
+              '免费服务器正在唤醒，通常需要 30–60 秒。页面会自动继续，请不要重复点击。',
+            ),
+        },
+      );
+      setAuthMessage(null);
       const payload = (await response.json()) as {
         displayName?: string;
         imageImportEnabled?: boolean;
@@ -143,28 +151,36 @@ export default function Home() {
       setAuthState('required');
       if (candidate !== undefined) {
         setAuthMessage(error instanceof Error ? error.message : '访问码无效');
+      } else {
+        setAuthMessage(null);
       }
     }
   }
 
-  async function copyBookmarklet() {
-    try {
-      const response = await fetch('/maiup-dxnet-export.js', {
-        cache: 'no-store',
-      });
-      if (!response.ok) throw new Error('无法加载导出脚本');
-      const source = await response.text();
-      const configuredSource = `globalThis.__MAIUP_IMPORT_ORIGIN__=${JSON.stringify(
-        window.location.origin,
-      )};${source}`;
-      const bookmarklet = `javascript:${configuredSource.replace(/\r?\n/g, ' ')}`;
-      await navigator.clipboard.writeText(bookmarklet);
-      setBookmarkletMessage('已复制自动导入书签。保存后，在已登录的 DX NET 页面点击一次。');
-    } catch (error: unknown) {
-      setBookmarkletMessage(
-        error instanceof Error ? error.message : '复制失败',
-      );
+  function copyBookmarklet() {
+    if (!bookmarklet) {
+      setBookmarkletMessage('自动导入书签仍在准备，请稍等后再试。');
+      return;
     }
+    setShowManualBookmarklet(false);
+    if (!navigator.clipboard?.writeText) {
+      setShowManualBookmarklet(true);
+      setBookmarkletMessage('浏览器不支持自动复制，请使用下方的手动复制。');
+      return;
+    }
+
+    // Safari requires this call to happen directly inside the click gesture.
+    void navigator.clipboard.writeText(bookmarklet).then(
+      () => {
+        setBookmarkletMessage(
+          '已复制自动导入书签。保存后，在已登录的 DX NET 页面点击一次。',
+        );
+      },
+      () => {
+        setShowManualBookmarklet(true);
+        setBookmarkletMessage('浏览器拒绝了自动复制，请使用下方的手动复制。');
+      },
+    );
   }
 
   async function importScoreFile(file: File | null) {
@@ -176,11 +192,20 @@ export default function Home() {
       if (file.size > 5 * 1024 * 1024)
         throw new Error('JSON 文件不能超过 5 MB');
       const payload: unknown = JSON.parse(await file.text());
-      const response = await apiFetch('/v1/imports/scores', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const response = await apiFetch(
+        '/v1/imports/scores',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+        {
+          onWaiting: () =>
+            setScoreImportMessage(
+              '免费服务器正在唤醒，通常需要 30–60 秒。唤醒后会自动继续导入。',
+            ),
+        },
+      );
       const result = await readApiJson<ScoreImportResult>(response, '成绩导入');
       if (!response.ok)
         throw new Error(result.detail ?? `成绩导入失败 (${response.status})`);
@@ -211,10 +236,19 @@ export default function Home() {
     const body = new FormData();
     body.append('image', selectedFile);
     try {
-      const response = await apiFetch('/v1/imports/b50/inspect', {
-        method: 'POST',
-        body,
-      });
+      const response = await apiFetch(
+        '/v1/imports/b50/inspect',
+        {
+          method: 'POST',
+          body,
+        },
+        {
+          onWaiting: () =>
+            setUploadMessage(
+              '免费服务器正在唤醒，通常需要 30–60 秒。唤醒后会自动继续检查。',
+            ),
+        },
+      );
       const payload = await readApiJson<{
         detail?: string;
         width?: number;
@@ -246,8 +280,33 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    fetch('/maiup-dxnet-export.js', { cache: 'no-store' })
+      .then((response) => {
+        if (!response.ok) throw new Error('无法加载自动导入脚本');
+        return response.text();
+      })
+      .then((source) => {
+        if (cancelled) return;
+        const configuredSource = `globalThis.__MAIUP_IMPORT_ORIGIN__=${JSON.stringify(
+          window.location.origin,
+        )};${source}`;
+        setBookmarklet(`javascript:${configuredSource.replace(/\r?\n/g, ' ')}`);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setBookmarkletMessage(
+          error instanceof Error ? error.message : '无法加载自动导入脚本',
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
-    fetch(`${API_ORIGIN}/v1/catalog/status`, { signal: controller.signal })
+    apiFetch('/v1/catalog/status', { signal: controller.signal })
       .then((response) => {
         if (!response.ok) throw new Error(`catalog status ${response.status}`);
         return response.json() as Promise<CatalogStatus>;
@@ -322,13 +381,26 @@ export default function Home() {
             placeholder="个人访问码"
             className="mt-6 min-h-12 w-full rounded-xl border border-white/12 bg-slate-950/50 px-4 outline-none focus:border-cyan-300"
           />
-          {authMessage && <p className="mt-3 text-sm text-rose-300">{authMessage}</p>}
+          {authMessage && (
+            <p
+              className={
+                'mt-3 text-sm ' +
+                (authState === 'loading' ? 'text-cyan-200' : 'text-rose-300')
+              }
+            >
+              {authMessage}
+            </p>
+          )}
           <Button
             type="submit"
             disabled={authState === 'loading' || !accessInput.trim()}
             className="mt-5 min-h-12 w-full rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200"
           >
-            {authState === 'loading' ? '正在连接…' : '进入'}
+            {authState === 'loading'
+              ? authMessage
+                ? '服务器唤醒中…'
+                : '正在连接…'
+              : '进入'}
           </Button>
         </form>
       </main>
@@ -451,10 +523,12 @@ export default function Home() {
               <div className="mb-5 rounded-2xl border border-cyan-200/15 bg-cyan-300/5 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-bold text-cyan-100">最近一次 B50</p>
+                    <p className="text-sm font-bold text-cyan-100">
+                      最近一次 B50
+                    </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {new Date(recentImports[0].importedAt).toLocaleString()} · 匹配{' '}
-                      {recentImports[0].matchedCount} 张谱面
+                      {new Date(recentImports[0].importedAt).toLocaleString()} ·
+                      匹配 {recentImports[0].matchedCount} 张谱面
                     </p>
                   </div>
                   {recentImports[0].b50Generated && (
@@ -503,89 +577,91 @@ export default function Home() {
 
               {imageImportEnabled && (
                 <TabsContent value="image">
-                <div className="grid-lines relative overflow-hidden rounded-[2rem] border border-cyan-200/15 bg-card/70 p-5 shadow-2xl shadow-cyan-950/20 sm:p-8">
-                  <div className="relative z-10">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <Badge
-                          variant="outline"
-                          className="border-lime-300/25 bg-lime-300/8 text-lime-200"
-                        >
-                          推荐入口
-                        </Badge>
-                        <h2 className="mt-4 font-display text-2xl font-bold">
-                          只用 B50 快速推荐
-                        </h2>
-                        <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                          上传标准 B50 成绩图，识别并校对 B35/B15
-                          后开始推荐。速度快，但只能根据榜内 50
-                          张谱面推断你的水平和擅长类型。
-                        </p>
+                  <div className="grid-lines relative overflow-hidden rounded-[2rem] border border-cyan-200/15 bg-card/70 p-5 shadow-2xl shadow-cyan-950/20 sm:p-8">
+                    <div className="relative z-10">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <Badge
+                            variant="outline"
+                            className="border-lime-300/25 bg-lime-300/8 text-lime-200"
+                          >
+                            推荐入口
+                          </Badge>
+                          <h2 className="mt-4 font-display text-2xl font-bold">
+                            只用 B50 快速推荐
+                          </h2>
+                          <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                            上传标准 B50 成绩图，识别并校对 B35/B15
+                            后开始推荐。速度快，但只能根据榜内 50
+                            张谱面推断你的水平和擅长类型。
+                          </p>
+                        </div>
+                        <div className="hidden size-16 place-items-center rounded-2xl border border-cyan-300/15 bg-cyan-300/8 sm:grid">
+                          <Fingerprint className="size-7 text-cyan-200" />
+                        </div>
                       </div>
-                      <div className="hidden size-16 place-items-center rounded-2xl border border-cyan-300/15 bg-cyan-300/8 sm:grid">
-                        <Fingerprint className="size-7 text-cyan-200" />
-                      </div>
-                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => fileInput.current?.click()}
-                      onDragOver={(event) => event.preventDefault()}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        chooseFile(event.dataTransfer.files.item(0));
-                      }}
-                      className="group mt-7 flex min-h-64 w-full cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-cyan-200/25 bg-slate-950/35 px-6 text-center transition hover:border-cyan-200/50 hover:bg-cyan-300/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
-                    >
-                      <span className="grid size-14 place-items-center rounded-2xl bg-cyan-300 text-slate-950 shadow-[0_0_40px_rgb(103_232_249/18%)] transition group-hover:-translate-y-1">
-                        {selectedFile ? (
-                          <CheckCircle2 className="size-6" />
-                        ) : (
-                          <UploadCloud className="size-6" />
-                        )}
-                      </span>
-                      <span className="mt-4 text-base font-bold">
-                        {selectedFile?.name ?? '选择或拖入 B50 图片'}
-                      </span>
-                      <span className="mt-1 text-sm text-muted-foreground">
-                        {selectedFile
-                          ? '图片已选中，可以先做安全检查'
-                          : 'PNG / JPEG · 暂不上传玩家账号信息'}
-                      </span>
-                    </button>
-                    <input
-                      ref={fileInput}
-                      type="file"
-                      accept="image/png,image/jpeg"
-                      className="sr-only"
-                      onChange={(event) =>
-                        chooseFile(event.target.files?.item(0) ?? null)
-                      }
-                    />
-
-                    <div className="mt-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-                      <p
-                        className={
-                          'max-w-xl text-xs leading-5 ' +
-                          (uploadState === 'error'
-                            ? 'text-rose-300'
-                            : 'text-muted-foreground')
+                      <button
+                        type="button"
+                        onClick={() => fileInput.current?.click()}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          chooseFile(event.dataTransfer.files.item(0));
+                        }}
+                        className="group mt-7 flex min-h-64 w-full cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-cyan-200/25 bg-slate-950/35 px-6 text-center transition hover:border-cyan-200/50 hover:bg-cyan-300/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+                      >
+                        <span className="grid size-14 place-items-center rounded-2xl bg-cyan-300 text-slate-950 shadow-[0_0_40px_rgb(103_232_249/18%)] transition group-hover:-translate-y-1">
+                          {selectedFile ? (
+                            <CheckCircle2 className="size-6" />
+                          ) : (
+                            <UploadCloud className="size-6" />
+                          )}
+                        </span>
+                        <span className="mt-4 text-base font-bold">
+                          {selectedFile?.name ?? '选择或拖入 B50 图片'}
+                        </span>
+                        <span className="mt-1 text-sm text-muted-foreground">
+                          {selectedFile
+                            ? '图片已选中，可以先做安全检查'
+                            : 'PNG / JPEG · 暂不上传玩家账号信息'}
+                        </span>
+                      </button>
+                      <input
+                        ref={fileInput}
+                        type="file"
+                        accept="image/png,image/jpeg"
+                        className="sr-only"
+                        onChange={(event) =>
+                          chooseFile(event.target.files?.item(0) ?? null)
                         }
-                      >
-                        {uploadMessage ??
-                          '下一步：图片会在本机临时保存用于 OCR；不会上传到云端，也不会直接用未核对结果推荐。'}
-                      </p>
-                      <Button
-                        disabled={!selectedFile || uploadState === 'uploading'}
-                        onClick={inspectSelectedImage}
-                        className="min-h-11 gap-2 rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200 disabled:opacity-45"
-                      >
-                        {uploadState === 'uploading' ? '检查中…' : '检查图片'}{' '}
-                        <ArrowRight className="size-4" />
-                      </Button>
+                      />
+
+                      <div className="mt-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                        <p
+                          className={
+                            'max-w-xl text-xs leading-5 ' +
+                            (uploadState === 'error'
+                              ? 'text-rose-300'
+                              : 'text-muted-foreground')
+                          }
+                        >
+                          {uploadMessage ??
+                            '下一步：图片会在本机临时保存用于 OCR；不会上传到云端，也不会直接用未核对结果推荐。'}
+                        </p>
+                        <Button
+                          disabled={
+                            !selectedFile || uploadState === 'uploading'
+                          }
+                          onClick={inspectSelectedImage}
+                          className="min-h-11 gap-2 rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200 disabled:opacity-45"
+                        >
+                          {uploadState === 'uploading' ? '检查中…' : '检查图片'}{' '}
+                          <ArrowRight className="size-4" />
+                        </Button>
+                      </div>
                     </div>
                   </div>
-                </div>
                 </TabsContent>
               )}
 
@@ -611,11 +687,12 @@ export default function Home() {
                       <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center">
                         <Button
                           type="button"
-                          onClick={() => void copyBookmarklet()}
+                          disabled={!bookmarklet}
+                          onClick={copyBookmarklet}
                           className="min-h-11 gap-2 rounded-xl bg-fuchsia-300 text-slate-950 hover:bg-fuchsia-200"
                         >
                           <Sparkles className="size-4" />
-                          复制自动导入书签
+                          {bookmarklet ? '复制自动导入书签' : '正在准备书签…'}
                         </Button>
                         <Button
                           type="button"
@@ -652,6 +729,21 @@ export default function Home() {
                             '到已登录的 DX NET 页面运行书签；失败时可上传导出的 JSON。'}
                         </p>
                       </div>
+                      {showManualBookmarklet && bookmarklet && (
+                        <div className="mt-4 min-w-0 rounded-2xl border border-amber-200/20 bg-amber-300/5 p-4">
+                          <p className="text-xs leading-5 text-amber-100">
+                            点按下方文本框，选择“全选”再“复制”，然后把整段内容粘贴到浏览器书签的网址栏。
+                          </p>
+                          <textarea
+                            readOnly
+                            value={bookmarklet}
+                            aria-label="MaiUp 自动导入书签代码"
+                            onFocus={(event) => event.currentTarget.select()}
+                            onClick={(event) => event.currentTarget.select()}
+                            className="mt-3 h-24 w-full max-w-full resize-none overflow-auto rounded-xl border border-white/10 bg-slate-950/70 p-3 font-mono text-[10px] leading-4 text-slate-200 outline-none focus:border-amber-200/40"
+                          />
+                        </div>
+                      )}
                       <div className="mt-4 rounded-2xl border border-white/8 bg-white/3 p-4">
                         <p className="text-sm font-semibold text-fuchsia-100">
                           从 DX NET 导出

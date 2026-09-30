@@ -62,11 +62,20 @@ export default function DxnetImportPage() {
       );
 
       try {
-        const response = await apiFetch('/v1/imports/scores', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(handoff.payload),
-        });
+        const response = await apiFetch(
+          '/v1/imports/scores',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(handoff.payload),
+          },
+          {
+            onWaiting: () =>
+              setMessage(
+                `已收到 ${handoff.payload.scores.length} 条成绩。免费服务器正在唤醒，通常需要 30–60 秒；唤醒后会自动继续导入…`,
+              ),
+          },
+        );
         const body = await response.text();
         const result = body ? (JSON.parse(body) as ScoreImportResult) : null;
         if (!response.ok || !result?.id) {
